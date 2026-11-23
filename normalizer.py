@@ -75,8 +75,8 @@ def extract_canonical_tokens(text: str) -> List[str]:
     return out
 
 
-def enrich_query_for_embedding(query: str, active_topic: str = "") -> str:
-    """Build `query: ...` text preserving native text + Banglish->English hints."""
+def enrich_query_for_embedding(query: str, active_topic: str = "", use_e5_prefix: bool = True) -> str:
+    """Build query text preserving native text + Banglish->English hints (with optional E5 prefix)."""
     norm = normalize_text(query)
     canon = extract_canonical_tokens(norm)
     parts: List[str] = []
@@ -85,7 +85,8 @@ def enrich_query_for_embedding(query: str, active_topic: str = "") -> str:
     parts.append(norm)
     if canon:
         parts.append("keywords: " + " ".join(canon))
-    return "query: " + " | ".join(parts)
+    body = " | ".join(parts)
+    return f"query: {body}" if use_e5_prefix else body
 
 
 def passes_rule_guards(rule: dict, query: str) -> bool:

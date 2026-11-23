@@ -15,6 +15,26 @@ DEFAULT_MODEL = "intfloat/multilingual-e5-small"
 TOPIC_BONUS = 0.03
 
 
+def load_embedder(model_name: str) -> Any:
+    """Load FastEmbed TextEmbedding, registering intfloat/multilingual-e5-small if not built-in."""
+    from fastembed import TextEmbedding
+
+    supported = {str(m.get("model", "")).lower() for m in TextEmbedding.list_supported_models()}
+    if model_name.lower() == DEFAULT_MODEL.lower() and model_name.lower() not in supported:
+        from fastembed.common.model_description import ModelSource, PoolingType
+
+        TextEmbedding.add_custom_model(
+            model=DEFAULT_MODEL,
+            pooling=PoolingType.MEAN,
+            normalization=True,
+            sources=ModelSource(hf=DEFAULT_MODEL),
+            dim=384,
+            model_file="onnx/model.onnx",
+            size_in_gb=0.47,
+        )
+    return TextEmbedding(model_name=model_name)
+
+
 def _parse_keywords(raw: Any) -> List[str]:
     if isinstance(raw, list):
         return [str(x).strip() for x in raw if str(x).strip()]
@@ -29,12 +49,13 @@ def _parse_keywords(raw: Any) -> List[str]:
     return []
 
 
-def build_rule_passage(rule: dict) -> str:
-    """Format a KB rule into an E5 `passage:` string."""
+def build_rule_passage(rule: dict, use_e5_prefix: bool = True) -> str:
+    """Format a KB rule into a passage string (with optional E5 `passage:` prefix)."""
     title = str(rule.get("title") or rule.get("rule_key") or "").strip()
     kws = ", ".join(_parse_keywords(rule.get("keywords")))
     resp = re_clean_snippet(str(rule.get("response") or ""))
-    return f"passage: {title} | keywords: {kws} | {resp[:320]}"
+    body = f"{title} | keywords: {kws} | {resp[:320]}"
+    return f"passage: {body}" if use_e5_prefix else body
 
 
 def re_clean_snippet(text: str) -> str:
@@ -44,9 +65,10 @@ def re_clean_snippet(text: str) -> str:
 class SemanticIndex:
     """Thread-safe in-memory vector index backed by numpy and optional SetFit classifier."""
 
-    def __init__(self, data_dir: str, embedder: Optional[Any] = None) -> None:
+    def __init__(self, data_dir: str, embedder: Optional[Any] = None, use_e5_prefix: bool = True) -> None:
         self.data_dir = Path(data_dir)
         self.embedder = embedder
+        self.use_e5_prefix = use_e5_prefix
         self.setfit_model: Optional[Any] = None
         self.rules: List[dict] = []
         self.vectors: Optional[np.ndarray] = None
@@ -92,7 +114,7 @@ class SemanticIndex:
                 skipped += 1
                 continue
             eligible.append(r)
-            passages.append(build_rule_passage(r))
+            passages.append(build_rule_passage(r, use_e5_prefix=self.use_e5_prefix))
 
         if not eligible:
             self.rules = []
@@ -141,7 +163,7 @@ class SemanticIndex:
         if not query.strip() or self.vectors is None or not self.rules:
             return {"ok": True, "mode": mode, "decision": "miss", "best_match": None, "suggestions": [], "latency_ms": 0.0}
 
-        q_vec = self._encode([enrich_query_for_embedding(query, active_topic)])[0]
+        q_vec = self._encode([enrich_query_for_embedding(query, active_topic, use_e5_prefix=self.use_e5_prefix)])[0]
         sims = self.vectors @ q_vec
         sf_boosts = self._setfit_boosts(query)
         topic_token = active_topic.replace("_", " ").lower() if active_topic else ""
@@ -229,10 +251,12 @@ def create_app():
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        from fastembed import TextEmbedding
-
-        embedder = TextEmbedding(model_name=model_name)
-        idx = SemanticIndex(data_dir=data_dir, embedder=embedder)
+        embedder = load_embedder(model_name)
+        idx = SemanticIndex(
+            data_dir=data_dir,
+            embedder=embedder,
+            use_e5_prefix=("e5" in model_name.lower()),
+        )
         if setfit_dir and Path(setfit_dir).exists():
             try:
                 from setfit import SetFitModel
