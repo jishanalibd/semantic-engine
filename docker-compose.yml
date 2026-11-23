@@ -1,0 +1,26 @@
+services:
+  bdwebs-semantic-engine:
+    build: .
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      - ENGINE_API_KEY=${ENGINE_API_KEY:-change-me-strong-secret}
+      - SEMANTIC_MODE=${SEMANTIC_MODE:-shadow}
+      - MODEL_NAME=intfloat/multilingual-e5-small
+      - DATA_DIR=/data
+      - DIRECT_THRESHOLD=0.84
+      - SUGGEST_THRESHOLD=0.76
+      - HANDOFF_THRESHOLD=0.88
+    volumes:
+      - semantic_data:/data
+    mem_limit: 1g
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  semantic_data:
